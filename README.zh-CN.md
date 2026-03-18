@@ -10,21 +10,6 @@
 
 > 仅支持 Windows 11。需要 Node.js 和 Claude Code。
 
-<p align="center">
-  <img src="assets/gif/clawd-idle.gif" width="80" alt="待机">
-  <img src="assets/gif/clawd-thinking.gif" width="80" alt="思考">
-  <img src="assets/gif/clawd-typing.gif" width="80" alt="打字">
-  <img src="assets/gif/clawd-building.gif" width="80" alt="建造">
-  <img src="assets/gif/clawd-juggling.gif" width="80" alt="杂耍">
-  <img src="assets/gif/clawd-conducting.gif" width="80" alt="指挥">
-  <img src="assets/gif/clawd-error.gif" width="80" alt="报错">
-  <img src="assets/gif/clawd-happy.gif" width="80" alt="开心">
-  <img src="assets/gif/clawd-notification.gif" width="80" alt="通知">
-  <img src="assets/gif/clawd-sweeping.gif" width="80" alt="扫地">
-  <img src="assets/gif/clawd-carrying.gif" width="80" alt="搬运">
-  <img src="assets/gif/clawd-sleeping.gif" width="80" alt="睡觉">
-</p>
-
 ## 功能特性
 
 - **实时状态感知** — 通过 Claude Code hook 系统自动驱动动画
@@ -41,26 +26,27 @@
 
 ## 状态映射
 
-| Claude Code 事件 | 桌宠状态 | 动画 |
-|---|---|---|
-| 无活动 | 待机 | 眼球跟踪 |
-| UserPromptSubmit | 思考 | 思考泡泡 |
-| PreToolUse / PostToolUse | 工作 | 打字（1会话）/ 杂耍（2）/ 建造（3+） |
-| SubagentStart | 杂耍 | 杂耍 / 指挥（2+子代理） |
-| PostToolUseFailure | 报错 | ERROR + 冒烟 |
-| Stop | 注意 | 开心蹦跳 |
-| PermissionRequest / Notification | 通知 | 惊叹跳跃 |
-| PreCompact | 扫地 | 扫帚清扫 |
-| PostCompact | 注意 | 开心蹦跳 |
-| WorktreeCreate | 搬运 | 搬箱子 |
-| 60秒无事件 | 睡觉 | 睡眠序列 |
+| Claude Code 事件 | 桌宠状态 | 动画 | |
+|---|---|---|---|
+| 无活动 | 待机 | 眼球跟踪 | <img src="assets/gif/clawd-idle.gif" width="48"> |
+| UserPromptSubmit | 思考 | 思考泡泡 | <img src="assets/gif/clawd-thinking.gif" width="48"> |
+| PreToolUse / PostToolUse | 工作（打字） | 打字 | <img src="assets/gif/clawd-typing.gif" width="48"> |
+| PreToolUse（3+ 会话） | 工作（建造） | 建造 | <img src="assets/gif/clawd-building.gif" width="48"> |
+| SubagentStart（1 个） | 杂耍 | 杂耍 | <img src="assets/gif/clawd-juggling.gif" width="48"> |
+| SubagentStart（2+） | 指挥 | 指挥 | <img src="assets/gif/clawd-conducting.gif" width="48"> |
+| PostToolUseFailure | 报错 | ERROR + 冒烟 | <img src="assets/gif/clawd-error.gif" width="48"> |
+| Stop / PostCompact | 注意 | 开心蹦跳 | <img src="assets/gif/clawd-happy.gif" width="48"> |
+| PermissionRequest / Notification | 通知 | 惊叹跳跃 | <img src="assets/gif/clawd-notification.gif" width="48"> |
+| PreCompact | 扫地 | 扫帚清扫 | <img src="assets/gif/clawd-sweeping.gif" width="48"> |
+| WorktreeCreate | 搬运 | 搬箱子 | <img src="assets/gif/clawd-carrying.gif" width="48"> |
+| 60 秒无事件 | 睡觉 | 睡眠序列 | <img src="assets/gif/clawd-sleeping.gif" width="48"> |
 
 ## 快速开始
 
 ```bash
 # 克隆仓库
 git clone https://github.com/rullerzhou-afk/clawd-on-desk.git
-cd clawd-desktop-pet
+cd clawd-on-desk
 
 # 安装依赖
 npm install

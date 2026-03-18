@@ -10,21 +10,6 @@ A desktop pet that reacts to your [Claude Code](https://docs.anthropic.com/en/do
 
 > Windows 11 only. Requires Node.js and Claude Code.
 
-<p align="center">
-  <img src="assets/gif/clawd-idle.gif" width="80" alt="idle">
-  <img src="assets/gif/clawd-thinking.gif" width="80" alt="thinking">
-  <img src="assets/gif/clawd-typing.gif" width="80" alt="typing">
-  <img src="assets/gif/clawd-building.gif" width="80" alt="building">
-  <img src="assets/gif/clawd-juggling.gif" width="80" alt="juggling">
-  <img src="assets/gif/clawd-conducting.gif" width="80" alt="conducting">
-  <img src="assets/gif/clawd-error.gif" width="80" alt="error">
-  <img src="assets/gif/clawd-happy.gif" width="80" alt="happy">
-  <img src="assets/gif/clawd-notification.gif" width="80" alt="notification">
-  <img src="assets/gif/clawd-sweeping.gif" width="80" alt="sweeping">
-  <img src="assets/gif/clawd-carrying.gif" width="80" alt="carrying">
-  <img src="assets/gif/clawd-sleeping.gif" width="80" alt="sleeping">
-</p>
-
 ## Features
 
 - **Real-time state awareness** — Claude Code hooks drive Clawd's animations automatically
@@ -41,26 +26,27 @@ A desktop pet that reacts to your [Claude Code](https://docs.anthropic.com/en/do
 
 ## State Mapping
 
-| Claude Code Event | Clawd State | Animation |
-|---|---|---|
-| Idle (no activity) | idle | Eye-tracking follow |
-| UserPromptSubmit | thinking | Thought bubble |
-| PreToolUse / PostToolUse | working | Typing (1 session) / Juggling (2) / Building (3+) |
-| SubagentStart | juggling | Juggling / Conducting (2+ subagents) |
-| PostToolUseFailure | error | ERROR + smoke |
-| Stop | attention | Happy bounce |
-| PermissionRequest / Notification | notification | Alert jump |
-| PreCompact | sweeping | Broom sweep |
-| PostCompact | attention | Happy bounce |
-| WorktreeCreate | carrying | Carrying box |
-| 60s no events | sleeping | Sleep sequence |
+| Claude Code Event | Clawd State | Animation | |
+|---|---|---|---|
+| Idle (no activity) | idle | Eye-tracking follow | <img src="assets/gif/clawd-idle.gif" width="48"> |
+| UserPromptSubmit | thinking | Thought bubble | <img src="assets/gif/clawd-thinking.gif" width="48"> |
+| PreToolUse / PostToolUse | working (typing) | Typing | <img src="assets/gif/clawd-typing.gif" width="48"> |
+| PreToolUse (3+ sessions) | working (building) | Building | <img src="assets/gif/clawd-building.gif" width="48"> |
+| SubagentStart (1) | juggling | Juggling | <img src="assets/gif/clawd-juggling.gif" width="48"> |
+| SubagentStart (2+) | conducting | Conducting | <img src="assets/gif/clawd-conducting.gif" width="48"> |
+| PostToolUseFailure | error | ERROR + smoke | <img src="assets/gif/clawd-error.gif" width="48"> |
+| Stop / PostCompact | attention | Happy bounce | <img src="assets/gif/clawd-happy.gif" width="48"> |
+| PermissionRequest / Notification | notification | Alert jump | <img src="assets/gif/clawd-notification.gif" width="48"> |
+| PreCompact | sweeping | Broom sweep | <img src="assets/gif/clawd-sweeping.gif" width="48"> |
+| WorktreeCreate | carrying | Carrying box | <img src="assets/gif/clawd-carrying.gif" width="48"> |
+| 60s no events | sleeping | Sleep sequence | <img src="assets/gif/clawd-sleeping.gif" width="48"> |
 
 ## Quick Start
 
 ```bash
 # Clone the repo
 git clone https://github.com/rullerzhou-afk/clawd-on-desk.git
-cd clawd-desktop-pet
+cd clawd-on-desk
 
 # Install dependencies
 npm install
