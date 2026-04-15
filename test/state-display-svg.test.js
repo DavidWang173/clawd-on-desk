@@ -113,4 +113,11 @@ describe("display_svg session hints (updateSession path)", () => {
     );
     assert.strictEqual(api.getSvgOverride("thinking"), "clawd-working-thinking.svg");
   });
+
+  it("resolves building display hint through the active theme", () => {
+    assert.strictEqual(
+      api.resolveDisplayHintSvg("clawd-working-building.svg"),
+      "clawd-working-building.svg"
+    );
+  });
 });

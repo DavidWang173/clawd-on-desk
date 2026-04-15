@@ -47,7 +47,7 @@ let isDragReacting = false;
 
 // Cancel signal from main (e.g. state change)
 window.hitAPI.onCancelReaction(() => {
-  if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; clickCount = 0; firstClickDir = null; }
+  resetClickSequence();
   isReacting = false;
   isDragReacting = false;
 });
@@ -131,7 +131,7 @@ area.addEventListener("pointercancel", () => stopDrag());
 area.addEventListener("lostpointercapture", () => { if (isDragging) stopDrag(); });
 window.addEventListener("blur", stopDrag);
 
-// --- Click reaction logic (2-click = poke, 4-click = flail) ---
+// --- Click reaction logic (2-click = poke, 3-click = easter egg, 4-click = flail) ---
 const CLICK_WINDOW_MS = 400;
 
 let clickCount = 0;
@@ -140,6 +140,46 @@ let firstClickDir = null;
 
 function _getReaction(name) {
   return _reactions[name] || null;
+}
+
+function resetClickSequence() {
+  if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+  clickCount = 0;
+  firstClickDir = null;
+}
+
+function finishClickSequence() {
+  clickTimer = null;
+  const count = clickCount;
+  const direction = firstClickDir;
+  clickCount = 0;
+  firstClickDir = null;
+
+  const doubleReact = _getReaction("double");
+  const annoyedReact = _getReaction("annoyed");
+  const leftReact = _getReaction("clickLeft");
+  const rightReact = _getReaction("clickRight");
+
+  if (count >= 4 && doubleReact) {
+    const files = doubleReact.files || [doubleReact.file];
+    const file = files[Math.floor(Math.random() * files.length)];
+    playReaction(file, doubleReact.duration || 3500);
+    return;
+  }
+
+  if (count === 3) {
+    window.hitAPI.triggerTripleClickAction();
+    return;
+  }
+
+  if (count === 2) {
+    if (annoyedReact && Math.random() < 0.5) {
+      playReaction(annoyedReact.file, annoyedReact.duration || 3500);
+    } else if (leftReact && rightReact) {
+      const react = direction === "left" ? leftReact : rightReact;
+      playReaction(react.file, react.duration || 2500);
+    }
+  }
 }
 
 function handleClick(clientX) {
@@ -161,41 +201,8 @@ function handleClick(clientX) {
     window.hitAPI.focusTerminal();
   }
 
-  if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
-
-  const doubleReact = _getReaction("double");
-  const annoyedReact = _getReaction("annoyed");
-  const leftReact = _getReaction("clickLeft");
-  const rightReact = _getReaction("clickRight");
-
-  if (clickCount >= 4 && doubleReact) {
-    clickCount = 0;
-    firstClickDir = null;
-    const files = doubleReact.files || [doubleReact.file];
-    const file = files[Math.floor(Math.random() * files.length)];
-    playReaction(file, doubleReact.duration || 3500);
-  } else if (clickCount >= 2) {
-    clickTimer = setTimeout(() => {
-      clickTimer = null;
-      clickCount = 0;
-      if (annoyedReact && Math.random() < 0.5) {
-        firstClickDir = null;
-        playReaction(annoyedReact.file, annoyedReact.duration || 3500);
-      } else if (leftReact && rightReact) {
-        const react = firstClickDir === "left" ? leftReact : rightReact;
-        firstClickDir = null;
-        playReaction(react.file, react.duration || 2500);
-      } else {
-        firstClickDir = null;
-      }
-    }, CLICK_WINDOW_MS);
-  } else {
-    clickTimer = setTimeout(() => {
-      clickTimer = null;
-      clickCount = 0;
-      firstClickDir = null;
-    }, CLICK_WINDOW_MS);
-  }
+  if (clickTimer) clearTimeout(clickTimer);
+  clickTimer = setTimeout(finishClickSequence, CLICK_WINDOW_MS);
 }
 
 function playReaction(svg, duration) {

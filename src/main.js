@@ -568,6 +568,61 @@ const { setState, applyState, updateSession, resolveDisplayState, getSvgOverride
         startStartupRecovery: _startStartupRecovery } = _state;
 const sessions = _state.sessions;
 const STATE_PRIORITY = _state.STATE_PRIORITY;
+const CLICK_EASTER_EGG_COOLDOWN_MS = 8000;
+const CLICK_EASTER_EGG_ACTIONS = [
+  { state: "thinking", weight: 34, minDurationMs: 4500, maxDurationMs: 9000 },
+  { state: "working", weight: 18, minDurationMs: 3200, maxDurationMs: 5600 },
+  { state: "sweeping", weight: 16, minDurationMs: 4200, maxDurationMs: 6500 },
+  { state: "attention", weight: 15, minDurationMs: 2800, maxDurationMs: 4200 },
+  { state: "juggling", weight: 8, minDurationMs: 5000, maxDurationMs: 8000 },
+  { state: "working", displayHint: "clawd-working-building.svg", weight: 3, minDurationMs: 4200, maxDurationMs: 7200 },
+  { state: "carrying", weight: 3, minDurationMs: 2600, maxDurationMs: 3600 },
+  { state: "juggling", displayHint: "clawd-working-conducting.svg", weight: 2, minDurationMs: 5200, maxDurationMs: 8200 },
+];
+let lastClickEasterEggAt = 0;
+
+function randomBetween(min, max) {
+  return min + Math.floor(Math.random() * (max - min + 1));
+}
+
+function pickWeighted(entries) {
+  let total = 0;
+  for (const entry of entries) total += entry.weight || 0;
+  if (total <= 0) return null;
+  let n = Math.random() * total;
+  for (const entry of entries) {
+    n -= entry.weight || 0;
+    if (n < 0) return entry;
+  }
+  return entries[entries.length - 1] || null;
+}
+
+function triggerTripleClickAction() {
+  if (!win || win.isDestroyed()) return false;
+  if (doNotDisturb || idlePaused || dragLocked) return false;
+  if (_mini.getMiniMode() || _mini.getMiniTransitioning() || _mini.getIsAnimating()) return false;
+  if (_state.getStartupRecoveryActive()) return false;
+  if (_state.getCurrentState() !== "idle") return false;
+  if (sessions.size > 0) return false;
+
+  const now = Date.now();
+  if (now - lastClickEasterEggAt < CLICK_EASTER_EGG_COOLDOWN_MS) return false;
+
+  const picked = pickWeighted(CLICK_EASTER_EGG_ACTIONS);
+  if (!picked) return false;
+
+  const svgOverride = picked.displayHint ? _state.resolveDisplayHintSvg(picked.displayHint) : null;
+  const started = _state.playTransientState(picked.state, {
+    durationMs: randomBetween(picked.minDurationMs, picked.maxDurationMs),
+    source: "interaction",
+    silent: true,
+    svgOverride,
+  });
+  if (!started) return false;
+
+  lastClickEasterEggAt = now;
+  return true;
+}
 
 // ── Hit-test: SVG bounding box → screen coordinates ──
 function getHitRectScreen(bounds) {
@@ -610,6 +665,7 @@ const _tickCtx = {
   get startupRecoveryActive() { return _state.getStartupRecoveryActive(); },
   get lowPowerMode() { return lowPowerMode; },
   get sessions() { return sessions; },
+  resolveDisplayHintSvg: (displayHint) => _state.resolveDisplayHintSvg(displayHint),
   sendToRenderer,
   sendToHitWin,
   setState,
@@ -1294,6 +1350,9 @@ function createWindow() {
   ipcMain.on("end-drag-reaction", () => sendToRenderer("end-drag-reaction"));
   ipcMain.on("play-click-reaction", (_, svg, duration) => {
     sendToRenderer("play-click-reaction", svg, duration);
+  });
+  ipcMain.on("trigger-triple-click-action", () => {
+    triggerTripleClickAction();
   });
 
   ipcMain.on("drag-end", () => {

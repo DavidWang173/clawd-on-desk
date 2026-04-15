@@ -31,10 +31,13 @@ const AUTONOMOUS_GLOBAL_COOLDOWN_MS = 30000;
 const AUTONOMOUS_SLEEP_GUARD_MS = 8000;
 const AUTONOMOUS_ACTIONS = [
   { key: "thinking", state: "thinking", weight: 18, cooldownMs: 45000, minDurationMs: 4500, maxDurationMs: 9000 },
-  { key: "sweeping", state: "sweeping", weight: 9, cooldownMs: 90000, minDurationMs: 4200, maxDurationMs: 6500 },
-  { key: "attention", state: "attention", weight: 8, cooldownMs: 120000, minDurationMs: 2800, maxDurationMs: 4200 },
-  { key: "typing", state: "working", weight: 5, cooldownMs: 75000, minDurationMs: 3200, maxDurationMs: 5600 },
-  { key: "juggling", state: "juggling", weight: 1, cooldownMs: 180000, minDurationMs: 5000, maxDurationMs: 8000 },
+  { key: "typing", state: "working", weight: 8, cooldownMs: 75000, minDurationMs: 3200, maxDurationMs: 5600 },
+  { key: "sweeping", state: "sweeping", weight: 8, cooldownMs: 90000, minDurationMs: 4200, maxDurationMs: 6500 },
+  { key: "attention", state: "attention", weight: 7, cooldownMs: 120000, minDurationMs: 2800, maxDurationMs: 4200 },
+  { key: "juggling", state: "juggling", weight: 1.2, cooldownMs: 180000, minDurationMs: 5000, maxDurationMs: 8000 },
+  { key: "building", state: "working", displayHint: "clawd-working-building.svg", weight: 0.45, cooldownMs: 240000, minDurationMs: 4200, maxDurationMs: 7200 },
+  { key: "carrying", state: "carrying", weight: 0.4, cooldownMs: 210000, minDurationMs: 2600, maxDurationMs: 3600 },
+  { key: "conducting", state: "juggling", displayHint: "clawd-working-conducting.svg", weight: 0.25, cooldownMs: 300000, minDurationMs: 5200, maxDurationMs: 8200 },
 ];
 
 // ── Theme-driven state (refreshed on hot theme switch) ──
@@ -109,10 +112,14 @@ function maybeRunAutonomousIdle(elapsed) {
   if (!picked || picked.key === "idle") return;
 
   const durationMs = randomBetween(picked.minDurationMs, picked.maxDurationMs);
+  const svgOverride = picked.displayHint && typeof ctx.resolveDisplayHintSvg === "function"
+    ? ctx.resolveDisplayHintSvg(picked.displayHint)
+    : null;
   const started = ctx.playTransientState(picked.state, {
     durationMs,
     source: "autonomous",
     silent: true,
+    svgOverride,
   });
   if (!started) return;
 

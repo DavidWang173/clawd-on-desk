@@ -133,13 +133,13 @@ function setState(newState, svgOverride, options = {}) {
   if (ctx.doNotDisturb) return;
 
   const incomingSource = options.source || "system";
-  const bypassMinDisplay = currentStateSource === "autonomous" && incomingSource !== "autonomous";
+  const bypassMinDisplay = currentStateSource !== "system" && incomingSource === "system";
 
   if (newState === "yawning" && SLEEP_SEQUENCE.has(currentState)) return;
 
   if (pendingTimer) {
     const pendingSource = pendingStateOptions && pendingStateOptions.source || "system";
-    if (pendingSource === "autonomous" && incomingSource !== "autonomous") {
+    if (pendingSource !== "system" && incomingSource === "system") {
       clearTimeout(pendingTimer);
       pendingTimer = null;
       pendingState = null;
@@ -178,7 +178,7 @@ function setState(newState, svgOverride, options = {}) {
       const queuedOptions = pendingStateOptions || {};
       pendingState = null;
       pendingStateOptions = null;
-      if (queuedOptions.source === "autonomous" || ONESHOT_STATES.has(queued)) {
+      if ((queuedOptions.source && queuedOptions.source !== "system") || ONESHOT_STATES.has(queued)) {
         applyState(queued, queuedSvg, queuedOptions);
       } else {
         const resolved = resolveDisplayState();
@@ -623,6 +623,11 @@ function setUpdateVisualState(kind) {
   return updateVisualState;
 }
 
+function resolveDisplayHintSvg(displayHint) {
+  if (!displayHint) return null;
+  return DISPLAY_HINT_MAP[displayHint] || null;
+}
+
 function playTransientState(state, options = {}) {
   const durationMs = Number.isFinite(options.durationMs) && options.durationMs > 0
     ? options.durationMs
@@ -838,6 +843,7 @@ return {
   getSvgOverride, cleanStaleSessions, startStartupRecovery, refreshTheme,
   detectRunningAgentProcesses, buildSessionSubmenu,
   clearSessionsByAgent,
+  resolveDisplayHintSvg,
   getCurrentState, getCurrentSvg, getCurrentHitBox, getStartupRecoveryActive,
   sessions, STATE_PRIORITY, ONESHOT_STATES, SLEEP_SEQUENCE,
   get STATE_SVGS() { return STATE_SVGS; },
