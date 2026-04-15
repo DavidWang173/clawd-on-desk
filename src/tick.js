@@ -16,9 +16,26 @@ let yawnDelayTimer = null;     // tracked setTimeout for yawn/idle-look transiti
 let idleWasActive = false;
 let lastEyeDx = 0, lastEyeDy = 0;
 let mainTickTimer = null;
+let autonomousNextAt = 0;
+let autonomousLastActionAt = 0;
+const autonomousCooldownUntil = new Map();
 
 const NORMAL_TICK_MS = 50;
 const LOW_POWER_TICK_MS = 125;
+const AUTONOMOUS_IDLE_WEIGHT = 72;
+const AUTONOMOUS_INITIAL_CHECK_MIN_MS = 12000;
+const AUTONOMOUS_INITIAL_CHECK_MAX_MS = 28000;
+const AUTONOMOUS_CHECK_MIN_MS = 25000;
+const AUTONOMOUS_CHECK_MAX_MS = 65000;
+const AUTONOMOUS_GLOBAL_COOLDOWN_MS = 30000;
+const AUTONOMOUS_SLEEP_GUARD_MS = 8000;
+const AUTONOMOUS_ACTIONS = [
+  { key: "thinking", state: "thinking", weight: 18, cooldownMs: 45000, minDurationMs: 4500, maxDurationMs: 9000 },
+  { key: "sweeping", state: "sweeping", weight: 9, cooldownMs: 90000, minDurationMs: 4200, maxDurationMs: 6500 },
+  { key: "attention", state: "attention", weight: 8, cooldownMs: 120000, minDurationMs: 2800, maxDurationMs: 4200 },
+  { key: "typing", state: "working", weight: 5, cooldownMs: 75000, minDurationMs: 3200, maxDurationMs: 5600 },
+  { key: "juggling", state: "juggling", weight: 1, cooldownMs: 180000, minDurationMs: 5000, maxDurationMs: 8000 },
+];
 
 // ── Theme-driven state (refreshed on hot theme switch) ──
 let theme = null;
@@ -41,6 +58,72 @@ function getTickIntervalMs() {
   return ctx.lowPowerMode ? LOW_POWER_TICK_MS : NORMAL_TICK_MS;
 }
 
+function randomBetween(min, max) {
+  return min + Math.floor(Math.random() * (max - min + 1));
+}
+
+function scheduleAutonomousCheck(minMs = AUTONOMOUS_CHECK_MIN_MS, maxMs = AUTONOMOUS_CHECK_MAX_MS) {
+  autonomousNextAt = Date.now() + randomBetween(minMs, maxMs);
+}
+
+function pickWeighted(entries) {
+  let total = 0;
+  for (const entry of entries) total += entry.weight || 0;
+  if (total <= 0) return null;
+  let n = Math.random() * total;
+  for (const entry of entries) {
+    n -= entry.weight || 0;
+    if (n < 0) return entry;
+  }
+  return entries[entries.length - 1] || null;
+}
+
+function canRunAutonomousIdle(elapsed) {
+  if (typeof ctx.playTransientState !== "function") return false;
+  if (ctx.currentState !== "idle" || ctx.idlePaused) return false;
+  if (ctx.miniMode || ctx.miniTransitioning || ctx.isAnimating) return false;
+  if (ctx.dragLocked || ctx.menuOpen || ctx.startupRecoveryActive) return false;
+  if (ctx.sessions && ctx.sessions.size > 0) return false;
+  if (isMouseIdle || idleLookReturnTimer || yawnDelayTimer || hasTriggeredYawn) return false;
+  if (elapsed >= Math.max(0, MOUSE_SLEEP_TIMEOUT - AUTONOMOUS_SLEEP_GUARD_MS)) return false;
+  return true;
+}
+
+function maybeRunAutonomousIdle(elapsed) {
+  const now = Date.now();
+  if (!autonomousNextAt) scheduleAutonomousCheck(AUTONOMOUS_INITIAL_CHECK_MIN_MS, AUTONOMOUS_INITIAL_CHECK_MAX_MS);
+  if (now < autonomousNextAt) return;
+
+  scheduleAutonomousCheck();
+  if (!canRunAutonomousIdle(elapsed)) return;
+  if (now - autonomousLastActionAt < AUTONOMOUS_GLOBAL_COOLDOWN_MS) return;
+
+  const choices = [{ key: "idle", weight: AUTONOMOUS_IDLE_WEIGHT }];
+  for (const action of AUTONOMOUS_ACTIONS) {
+    if (now >= (autonomousCooldownUntil.get(action.key) || 0)) {
+      choices.push(action);
+    }
+  }
+
+  const picked = pickWeighted(choices);
+  if (!picked || picked.key === "idle") return;
+
+  const durationMs = randomBetween(picked.minDurationMs, picked.maxDurationMs);
+  const started = ctx.playTransientState(picked.state, {
+    durationMs,
+    source: "autonomous",
+    silent: true,
+  });
+  if (!started) return;
+
+  autonomousLastActionAt = now;
+  autonomousCooldownUntil.set(picked.key, now + picked.cooldownMs);
+  scheduleAutonomousCheck(
+    Math.max(AUTONOMOUS_CHECK_MIN_MS, AUTONOMOUS_GLOBAL_COOLDOWN_MS),
+    AUTONOMOUS_CHECK_MAX_MS
+  );
+}
+
 function tickOnce() {
   if (!ctx.win || ctx.win.isDestroyed()) return;
 
@@ -57,6 +140,9 @@ function tickOnce() {
     mouseStillSince = Date.now();
     lastEyeDx = 0;
     lastEyeDy = 0;
+    if (autonomousNextAt <= Date.now()) {
+      scheduleAutonomousCheck(AUTONOMOUS_INITIAL_CHECK_MIN_MS, AUTONOMOUS_INITIAL_CHECK_MAX_MS);
+    }
     if (idleLookReturnTimer) { clearTimeout(idleLookReturnTimer); idleLookReturnTimer = null; }
     if (yawnDelayTimer) { clearTimeout(yawnDelayTimer); yawnDelayTimer = null; }
   }
@@ -64,6 +150,7 @@ function tickOnce() {
   if (!idleNow && idleWasActive) {
     if (idleLookReturnTimer) { clearTimeout(idleLookReturnTimer); idleLookReturnTimer = null; }
     if (yawnDelayTimer) { clearTimeout(yawnDelayTimer); yawnDelayTimer = null; }
+    autonomousNextAt = 0;
   }
   idleWasActive = idleNow;
 
@@ -117,6 +204,7 @@ function tickOnce() {
       mouseStillSince = Date.now();
       hasTriggeredYawn = false;
       idleLookPlayed = false;
+      scheduleAutonomousCheck(AUTONOMOUS_INITIAL_CHECK_MIN_MS, AUTONOMOUS_INITIAL_CHECK_MAX_MS);
       if (idleLookReturnTimer) { clearTimeout(idleLookReturnTimer); idleLookReturnTimer = null; }
       if (yawnDelayTimer) { clearTimeout(yawnDelayTimer); yawnDelayTimer = null; }
       if (isMouseIdle) {
@@ -167,6 +255,8 @@ function tickOnce() {
       }, 250 + pick.duration);
       return;
     }
+
+    maybeRunAutonomousIdle(elapsed);
   }
 
   const trackEyesNow = (idleNow && ctx.currentSvg === SVG_IDLE_FOLLOW && !isMouseIdle) || miniIdleNow;
@@ -226,6 +316,7 @@ function setLowPowerMode() {
 
 function resetIdleTimer() {
   mouseStillSince = Date.now();
+  scheduleAutonomousCheck(AUTONOMOUS_INITIAL_CHECK_MIN_MS, AUTONOMOUS_INITIAL_CHECK_MAX_MS);
 }
 
 function cleanup() {
@@ -240,6 +331,9 @@ function cleanup() {
   idleWasActive = false;
   lastEyeDx = 0;
   lastEyeDy = 0;
+  autonomousNextAt = 0;
+  autonomousLastActionAt = 0;
+  autonomousCooldownUntil.clear();
 }
 
 // Expose mouseStillSince for wake poll (state.js deep sleep timeout)

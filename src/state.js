@@ -67,10 +67,12 @@ let currentHitBox = HIT_BOXES.default;
 let currentState = "idle";
 let previousState = "idle";
 let currentSvg = null;
+let currentStateSource = "system";
 let stateChangedAt = Date.now();
 let pendingTimer = null;
 let autoReturnTimer = null;
 let pendingState = null;
+let pendingStateOptions = null;
 let eyeResendTimer = null;
 let updateVisualState = null;
 let updateVisualSvgOverride = null;
@@ -127,18 +129,31 @@ function refreshTheme() {
 
 refreshTheme();
 
-function setState(newState, svgOverride) {
+function setState(newState, svgOverride, options = {}) {
   if (ctx.doNotDisturb) return;
+
+  const incomingSource = options.source || "system";
+  const bypassMinDisplay = currentStateSource === "autonomous" && incomingSource !== "autonomous";
 
   if (newState === "yawning" && SLEEP_SEQUENCE.has(currentState)) return;
 
   if (pendingTimer) {
+    const pendingSource = pendingStateOptions && pendingStateOptions.source || "system";
+    if (pendingSource === "autonomous" && incomingSource !== "autonomous") {
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+      pendingState = null;
+      pendingStateOptions = null;
+    }
     if (pendingState && (STATE_PRIORITY[newState] || 0) < (STATE_PRIORITY[pendingState] || 0)) {
       return;
     }
-    clearTimeout(pendingTimer);
-    pendingTimer = null;
-    pendingState = null;
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+      pendingState = null;
+      pendingStateOptions = null;
+    }
   }
 
   const sameState = newState === currentState;
@@ -147,28 +162,31 @@ function setState(newState, svgOverride) {
     return;
   }
 
-  const minTime = MIN_DISPLAY_MS[currentState] || 0;
+  const minTime = bypassMinDisplay ? 0 : (MIN_DISPLAY_MS[currentState] || 0);
   const elapsed = Date.now() - stateChangedAt;
   const remaining = minTime - elapsed;
 
   if (remaining > 0) {
     if (autoReturnTimer) { clearTimeout(autoReturnTimer); autoReturnTimer = null; }
     pendingState = newState;
+    pendingStateOptions = options;
     const pendingSvgOverride = svgOverride;
     pendingTimer = setTimeout(() => {
       pendingTimer = null;
       const queued = pendingState;
       const queuedSvg = pendingSvgOverride;
+      const queuedOptions = pendingStateOptions || {};
       pendingState = null;
-      if (ONESHOT_STATES.has(queued)) {
-        applyState(queued, queuedSvg);
+      pendingStateOptions = null;
+      if (queuedOptions.source === "autonomous" || ONESHOT_STATES.has(queued)) {
+        applyState(queued, queuedSvg, queuedOptions);
       } else {
         const resolved = resolveDisplayState();
         applyState(resolved, getSvgOverride(resolved));
       }
     }, remaining);
   } else {
-    applyState(newState, svgOverride);
+    applyState(newState, svgOverride, options);
   }
 }
 
@@ -179,7 +197,11 @@ function isOneshotDisabled(logicalState) {
   catch { return false; }
 }
 
-function applyState(state, svgOverride) {
+function applyState(state, svgOverride, options = {}) {
+  const autoReturnOverrideMs = Number.isFinite(options.autoReturnMs) && options.autoReturnMs > 0
+    ? options.autoReturnMs
+    : null;
+  const shouldPlaySound = options.silent !== true;
   // Phase 3b: user-disabled oneshot state — skip visual + sound, fall back to
   // whatever resolveDisplayState picks (usually working/idle). Gate lives at
   // applyState() top so it catches all three paths that reach here:
@@ -211,14 +233,17 @@ function applyState(state, svgOverride) {
 
   previousState = currentState;
   currentState = state;
+  currentStateSource = options.source || "system";
   stateChangedAt = Date.now();
   ctx.idlePaused = false;
 
   // Sound triggers
-  if (state === "attention" || state === "mini-happy") {
-    ctx.playSound("complete");
-  } else if (state === "notification" || state === "mini-alert") {
-    ctx.playSound("confirm");
+  if (shouldPlaySound) {
+    if (state === "attention" || state === "mini-happy") {
+      ctx.playSound("complete");
+    } else if (state === "notification" || state === "mini-alert") {
+      ctx.playSound("confirm");
+    }
   }
 
   const svgs = STATE_SVGS[state] || STATE_SVGS.idle;
@@ -278,7 +303,8 @@ function applyState(state, svgOverride) {
       const resolved = resolveDisplayState();
       applyState(resolved, getSvgOverride(resolved));
     }, WAKE_DURATION);
-  } else if (AUTO_RETURN_MS[state]) {
+  } else if (autoReturnOverrideMs || AUTO_RETURN_MS[state]) {
+    const returnMs = autoReturnOverrideMs || AUTO_RETURN_MS[state];
     autoReturnTimer = setTimeout(() => {
       autoReturnTimer = null;
       if (ctx.miniMode) {
@@ -298,7 +324,7 @@ function applyState(state, svgOverride) {
         const resolved = resolveDisplayState();
         applyState(resolved, getSvgOverride(resolved));
       }
-    }, AUTO_RETURN_MS[state]);
+    }, returnMs);
   }
 }
 
@@ -597,6 +623,18 @@ function setUpdateVisualState(kind) {
   return updateVisualState;
 }
 
+function playTransientState(state, options = {}) {
+  const durationMs = Number.isFinite(options.durationMs) && options.durationMs > 0
+    ? options.durationMs
+    : null;
+  const svgOverride = options.svgOverride !== undefined ? options.svgOverride : getSvgOverride(state);
+  return setState(state, svgOverride, {
+    source: options.source || "autonomous",
+    autoReturnMs: durationMs,
+    silent: options.silent !== false,
+  });
+}
+
 function getActiveWorkingCount() {
   let n = 0;
   for (const [, s] of sessions) {
@@ -794,7 +832,7 @@ function cleanup() {
 }
 
 return {
-  setState, applyState, updateSession, resolveDisplayState, setUpdateVisualState,
+  setState, applyState, updateSession, resolveDisplayState, setUpdateVisualState, playTransientState,
   enableDoNotDisturb, disableDoNotDisturb,
   startStaleCleanup, stopStaleCleanup, startWakePoll, stopWakePoll,
   getSvgOverride, cleanStaleSessions, startStartupRecovery, refreshTheme,

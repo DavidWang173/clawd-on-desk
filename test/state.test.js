@@ -238,6 +238,29 @@ describe("setState() debounce", () => {
     api.setState("yawning");
     assert.strictEqual(api.getCurrentState(), "dozing");
   });
+
+  it("autonomous transient state auto-returns to idle without sound", () => {
+    let soundCount = 0;
+    api.cleanup();
+    ctx = makeCtx({ playSound: () => { soundCount++; } });
+    api = require("../src/state")(ctx);
+
+    api.playTransientState("attention", { durationMs: 2000 });
+    assert.strictEqual(api.getCurrentState(), "attention");
+    assert.strictEqual(soundCount, 0);
+
+    mock.timers.tick(2000);
+    assert.strictEqual(api.getCurrentState(), "idle");
+    assert.strictEqual(soundCount, 0);
+  });
+
+  it("real state preempts autonomous immediately", () => {
+    api.playTransientState("thinking", { durationMs: 4000 });
+    assert.strictEqual(api.getCurrentState(), "thinking");
+
+    api.setState("working");
+    assert.strictEqual(api.getCurrentState(), "working");
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
