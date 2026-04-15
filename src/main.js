@@ -1624,7 +1624,20 @@ if (!gotTheLock) {
       const codexAgent = require("../agents/codex");
       _codexMonitor = new CodexLogMonitor(codexAgent, (sid, state, event, extra) => {
         if (state === "codex-permission") {
-          updateSession(sid, "notification", event, null, extra.cwd, null, null, null, "codex");
+          updateSession(
+              sid,
+              "notification",
+              event,
+              extra && extra.sourcePid || null,
+              extra && extra.cwd || "",
+              null,
+              null,
+              extra && extra.agentPid || null,
+              "codex",
+              null,
+              false,
+              extra && extra.displayHint
+          );
           showCodexNotifyBubble({
             sessionId: sid,
             command: extra.permissionDetail?.command || "",
@@ -1632,7 +1645,20 @@ if (!gotTheLock) {
           return;
         }
         clearCodexNotifyBubbles(sid);
-        updateSession(sid, state, event, null, extra.cwd, null, null, null, "codex");
+        updateSession(
+            sid,
+            state,
+            event,
+            extra && extra.sourcePid || null,
+            extra && extra.cwd || "",
+            null,
+            null,
+            extra && extra.agentPid || null,
+            "codex",
+            null,
+            false,
+            extra && extra.displayHint
+        );
       });
       if (_isAgentEnabled(_settingsController.getSnapshot(), "codex")) {
         _codexMonitor.start();

@@ -391,7 +391,7 @@ function updateSession(sessionId, state, event, sourcePid, cwd, editor, pidChain
     if (oldestId) sessions.delete(oldestId);
   }
 
-  if (event === "SessionEnd") {
+  if (event === "SessionEnd" || event === "stale-cleanup") {
     const endingSession = sessions.get(sessionId);
     sessions.delete(sessionId);
     cleanStaleSessions();
