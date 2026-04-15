@@ -79,7 +79,8 @@
     "clawd-working-thinking.svg": "clawd-working-thinking.svg",
     "codex-working-shell-heavy": "clawd-working-building.svg",
     "codex-working-patching": "clawd-working-typing.svg",
-    "codex-working-reading": "clawd-idle-reading.svg"
+    "codex-working-reading": "clawd-idle-reading.svg",
+    "codex-working-web": "clawd-working-debugger.svg"
   },
 
   "timings": {

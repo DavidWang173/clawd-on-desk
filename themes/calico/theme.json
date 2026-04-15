@@ -79,7 +79,11 @@
     "clawd-working-typing.svg":   "calico-working-typing.apng",
     "clawd-working-juggling.svg": "calico-working-juggling.apng",
     "clawd-working-conducting.svg": "calico-working-conducting.apng",
-    "clawd-working-thinking.svg": "calico-thinking.apng"
+    "clawd-working-thinking.svg": "calico-thinking.apng",
+    "codex-working-shell-heavy": "calico-working-building.apng",
+    "codex-working-patching": "calico-working-typing.apng",
+    "codex-working-reading": "calico-thinking.apng",
+    "codex-working-web": "calico-thinking.apng"
   },
 
   "timings": {
