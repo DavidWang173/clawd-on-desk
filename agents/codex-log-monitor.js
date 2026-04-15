@@ -10,6 +10,10 @@ const APPROVAL_HEURISTIC_MS = 2000;
 const MAX_TRACKED_FILES = 50;
 const MAX_PARTIAL_BYTES = 65536;
 const RECENT_DAY_DIR_CACHE_MS = 60 * 60 * 1000; // 1 hour
+const ACTIVE_POLL_WINDOW_MS = 30000;
+const WARM_POLL_WINDOW_MS = 300000;
+const WARM_POLL_INTERVAL_MS = 5000;
+const COLD_POLL_INTERVAL_MS = 10000;
 
 class CodexLogMonitor {
   /**
@@ -19,7 +23,8 @@ class CodexLogMonitor {
   constructor(agentConfig, onStateChange) {
     this._config = agentConfig;
     this._onStateChange = onStateChange;
-    this._interval = null;
+    this._timer = null;
+    this._running = false;
     // Map<filePath, { offset, sessionId, cwd, lastEventTime, lastState, partial }>
     this._tracked = new Map();
     this._baseDir = this._resolveBaseDir();
@@ -27,6 +32,7 @@ class CodexLogMonitor {
     this._recentDayDirsCacheAt = 0;
     this._recentDayDirsDateKey = "";
     this._startedAtMs = Date.now();
+    this._lastObservedActivityAt = this._startedAtMs;
   }
 
   _resolveBaseDir() {
@@ -38,20 +44,20 @@ class CodexLogMonitor {
   }
 
   start() {
-    if (this._interval) return;
+    if (this._running) return;
+    this._running = true;
     this._startedAtMs = Date.now();
+    this._lastObservedActivityAt = this._startedAtMs;
     // Initial scan
     this._poll();
-    this._interval = setInterval(
-      () => this._poll(),
-      this._config.logConfig.pollIntervalMs || 1500
-    );
+    this._scheduleNextPoll(this._getPollIntervalMs());
   }
 
   stop() {
-    if (this._interval) {
-      clearInterval(this._interval);
-      this._interval = null;
+    this._running = false;
+    if (this._timer) {
+      clearTimeout(this._timer);
+      this._timer = null;
     }
     for (const tracked of this._tracked.values()) {
       if (tracked.approvalTimer) clearTimeout(tracked.approvalTimer);
@@ -225,6 +231,7 @@ class CodexLogMonitor {
     // is harmless for the pet's display state.
     const remainder = lines.pop() || "";
     tracked.partial = remainder.length > MAX_PARTIAL_BYTES ? "" : remainder;
+    this._lastObservedActivityAt = Date.now();
 
     for (const line of lines) {
       if (!line.trim()) continue;
@@ -283,21 +290,28 @@ class CodexLogMonitor {
       tracked.hadToolUse = true;
     }
 
-    // Turn-end: happy if tools were used this turn, idle otherwise
+    // Turn-end: happy only when tools were used this turn; pure text replies
+    // return to idle without the happy bounce.
     if (state === "codex-turn-end") {
       if (tracked.approvalTimer) {
         clearTimeout(tracked.approvalTimer);
         tracked.approvalTimer = null;
       }
+      const completionKind = tracked.hadToolUse ? "tool" : "text";
       const resolved = tracked.hadToolUse ? "attention" : "idle";
+      const completionEvent = tracked.hadToolUse
+        ? "CodexToolComplete"
+        : "CodexTextComplete";
       tracked.hadToolUse = false;
       tracked.lastState = resolved;
       tracked.lastEventTime = Date.now();
+      this._lastObservedActivityAt = tracked.lastEventTime;
       const agentPid = this._resolveTrackedAgentPid(tracked);
-      this._onStateChange(tracked.sessionId, resolved, key, {
+      this._onStateChange(tracked.sessionId, resolved, completionEvent, {
         cwd: tracked.cwd,
         sourcePid: agentPid,
         agentPid,
+        completionKind,
       });
       return;
     }
@@ -312,10 +326,12 @@ class CodexLogMonitor {
         if (this._isExplicitApprovalRequest(payload)) {
           const agentPid = this._resolveTrackedAgentPid(tracked);
           tracked.lastEventTime = Date.now();
+          this._lastObservedActivityAt = tracked.lastEventTime;
           this._onStateChange(tracked.sessionId, "codex-permission", key, {
             cwd: tracked.cwd,
             sourcePid: agentPid,
             agentPid,
+            permissionSignal: "explicit",
             permissionDetail: { command: cmd, rawPayload: payload },
           });
           return;
@@ -324,10 +340,12 @@ class CodexLogMonitor {
           tracked.approvalTimer = null;
           const agentPid = this._resolveTrackedAgentPid(tracked);
           tracked.lastEventTime = Date.now();
-          this._onStateChange(tracked.sessionId, "codex-permission", key, {
+          this._lastObservedActivityAt = tracked.lastEventTime;
+          this._onStateChange(tracked.sessionId, "codex-permission", "CodexPermissionHeuristic", {
             cwd: tracked.cwd,
             sourcePid: agentPid,
             agentPid,
+            permissionSignal: "heuristic",
             permissionDetail: { command: cmd, rawPayload: payload },
           });
         }, APPROVAL_HEURISTIC_MS);
@@ -342,6 +360,7 @@ class CodexLogMonitor {
     if (state === tracked.lastState && state === "working") return;
     tracked.lastState = state;
     tracked.lastEventTime = Date.now();
+    this._lastObservedActivityAt = tracked.lastEventTime;
 
     const agentPid = this._resolveTrackedAgentPid(tracked);
     this._onStateChange(tracked.sessionId, state, key, {
@@ -370,6 +389,7 @@ class CodexLogMonitor {
     if (!payload || typeof payload !== "object") return null;
 
     if (key === "event_msg:patch_apply_end") return "codex-working-patching";
+    if (key === "response_item:web_search_call") return "codex-working-web";
 
     const name = typeof payload.name === "string" ? payload.name : "";
     const args = this._parsePayloadArguments(payload);
@@ -421,6 +441,32 @@ class CodexLogMonitor {
       if (typeof args.justification === "string" && args.justification.trim()) return true;
     } catch {}
     return false;
+  }
+
+  _getPollIntervalMs() {
+    const fastPollMs = this._config.logConfig.pollIntervalMs || 1500;
+    const now = Date.now();
+
+    for (const tracked of this._tracked.values()) {
+      if (tracked.approvalTimer) return fastPollMs;
+      if (now - tracked.lastEventTime <= ACTIVE_POLL_WINDOW_MS) return fastPollMs;
+    }
+
+    if (this._tracked.size > 0 || now - this._lastObservedActivityAt <= WARM_POLL_WINDOW_MS) {
+      return Math.max(fastPollMs, WARM_POLL_INTERVAL_MS);
+    }
+
+    return Math.max(fastPollMs, COLD_POLL_INTERVAL_MS);
+  }
+
+  _scheduleNextPoll(delayMs) {
+    if (!this._running) return;
+    this._timer = setTimeout(() => {
+      this._timer = null;
+      if (!this._running) return;
+      this._poll();
+      this._scheduleNextPoll(this._getPollIntervalMs());
+    }, delayMs);
   }
 
   // Extract UUID from rollout filename

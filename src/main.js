@@ -1624,20 +1624,22 @@ if (!gotTheLock) {
       const codexAgent = require("../agents/codex");
       _codexMonitor = new CodexLogMonitor(codexAgent, (sid, state, event, extra) => {
         if (state === "codex-permission") {
-          updateSession(
-              sid,
-              "notification",
-              event,
-              extra && extra.sourcePid || null,
-              extra && extra.cwd || "",
-              null,
-              null,
-              extra && extra.agentPid || null,
-              "codex",
-              null,
-              false,
-              extra && extra.displayHint
-          );
+          if (extra && extra.permissionSignal === "explicit") {
+            updateSession(
+                sid,
+                "notification",
+                event,
+                extra && extra.sourcePid || null,
+                extra && extra.cwd || "",
+                null,
+                null,
+                extra && extra.agentPid || null,
+                "codex",
+                null,
+                false,
+                extra && extra.displayHint
+            );
+          }
           showCodexNotifyBubble({
             sessionId: sid,
             command: extra.permissionDetail?.command || "",
