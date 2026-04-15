@@ -14,6 +14,9 @@ const ACTIVE_POLL_WINDOW_MS = 30000;
 const WARM_POLL_WINDOW_MS = 300000;
 const WARM_POLL_INTERVAL_MS = 5000;
 const COLD_POLL_INTERVAL_MS = 10000;
+const LOW_POWER_FAST_POLL_MS = 2500;
+const LOW_POWER_WARM_POLL_MS = 6000;
+const LOW_POWER_COLD_POLL_MS = 10000;
 
 class CodexLogMonitor {
   /**
@@ -33,6 +36,7 @@ class CodexLogMonitor {
     this._recentDayDirsDateKey = "";
     this._startedAtMs = Date.now();
     this._lastObservedActivityAt = this._startedAtMs;
+    this._lowPowerMode = false;
   }
 
   _resolveBaseDir() {
@@ -63,6 +67,16 @@ class CodexLogMonitor {
       if (tracked.approvalTimer) clearTimeout(tracked.approvalTimer);
     }
     this._tracked.clear();
+  }
+
+  setLowPowerMode(enabled) {
+    this._lowPowerMode = !!enabled;
+    if (!this._running) return;
+    if (this._timer) {
+      clearTimeout(this._timer);
+      this._timer = null;
+    }
+    this._scheduleNextPoll(this._getPollIntervalMs());
   }
 
   _poll() {
@@ -444,7 +458,11 @@ class CodexLogMonitor {
   }
 
   _getPollIntervalMs() {
-    const fastPollMs = this._config.logConfig.pollIntervalMs || 1500;
+    const fastPollMs = this._lowPowerMode
+      ? LOW_POWER_FAST_POLL_MS
+      : (this._config.logConfig.pollIntervalMs || 1500);
+    const warmPollMs = this._lowPowerMode ? LOW_POWER_WARM_POLL_MS : WARM_POLL_INTERVAL_MS;
+    const coldPollMs = this._lowPowerMode ? LOW_POWER_COLD_POLL_MS : COLD_POLL_INTERVAL_MS;
     const now = Date.now();
 
     for (const tracked of this._tracked.values()) {
@@ -453,10 +471,10 @@ class CodexLogMonitor {
     }
 
     if (this._tracked.size > 0 || now - this._lastObservedActivityAt <= WARM_POLL_WINDOW_MS) {
-      return Math.max(fastPollMs, WARM_POLL_INTERVAL_MS);
+      return Math.max(fastPollMs, warmPollMs);
     }
 
-    return Math.max(fastPollMs, COLD_POLL_INTERVAL_MS);
+    return Math.max(fastPollMs, coldPollMs);
   }
 
   _scheduleNextPoll(delayMs) {

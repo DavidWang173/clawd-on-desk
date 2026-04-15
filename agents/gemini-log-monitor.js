@@ -11,6 +11,13 @@ const os = require("os");
 // Defer long enough so most tool approvals complete before the timer fires.
 // Pure text completions (no tools all turn) get feedback after this delay.
 const DEFER_COMPLETION_MS = 4000;
+const ACTIVE_POLL_WINDOW_MS = 30000;
+const WARM_POLL_WINDOW_MS = 300000;
+const WARM_POLL_INTERVAL_MS = 5000;
+const COLD_POLL_INTERVAL_MS = 10000;
+const LOW_POWER_FAST_POLL_MS = 2500;
+const LOW_POWER_WARM_POLL_MS = 6000;
+const LOW_POWER_COLD_POLL_MS = 10000;
 
 const DEBUG = !!(process.env.CLAWD_DEBUG || process.env.CLAWD_DEBUG_GEMINI);
 
@@ -22,12 +29,15 @@ class GeminiLogMonitor {
   constructor(agentConfig, onStateChange) {
     this._config = agentConfig;
     this._onStateChange = onStateChange;
-    this._interval = null;
+    this._timer = null;
+    this._running = false;
     this._tracked = new Map();
     this._pendingCompletions = new Map();
     this._baseDir = this._resolveBaseDir();
     this._cwdMap = null;
     this._projectsMtime = 0;
+    this._lastObservedActivityAt = Date.now();
+    this._lowPowerMode = false;
   }
 
   _resolveBaseDir() {
@@ -39,22 +49,32 @@ class GeminiLogMonitor {
   }
 
   start() {
-    if (this._interval) return;
+    if (this._running) return;
+    this._running = true;
+    this._lastObservedActivityAt = Date.now();
     this._poll();
-    this._interval = setInterval(
-      () => this._poll(),
-      this._config.logConfig.pollIntervalMs || 1500
-    );
+    this._scheduleNextPoll(this._getPollIntervalMs());
   }
 
   stop() {
-    if (this._interval) {
-      clearInterval(this._interval);
-      this._interval = null;
+    this._running = false;
+    if (this._timer) {
+      clearTimeout(this._timer);
+      this._timer = null;
     }
     for (const timer of this._pendingCompletions.values()) clearTimeout(timer);
     this._pendingCompletions.clear();
     this._tracked.clear();
+  }
+
+  setLowPowerMode(enabled) {
+    this._lowPowerMode = !!enabled;
+    if (!this._running) return;
+    if (this._timer) {
+      clearTimeout(this._timer);
+      this._timer = null;
+    }
+    this._scheduleNextPoll(this._getPollIntervalMs());
   }
 
   _loadCwdMap() {
@@ -123,6 +143,34 @@ class GeminiLogMonitor {
     this._cleanStale();
   }
 
+  _getPollIntervalMs() {
+    const fastPollMs = this._lowPowerMode
+      ? LOW_POWER_FAST_POLL_MS
+      : (this._config.logConfig.pollIntervalMs || 1500);
+    const warmPollMs = this._lowPowerMode ? LOW_POWER_WARM_POLL_MS : WARM_POLL_INTERVAL_MS;
+    const coldPollMs = this._lowPowerMode ? LOW_POWER_COLD_POLL_MS : COLD_POLL_INTERVAL_MS;
+    const now = Date.now();
+
+    if (this._pendingCompletions.size > 0) return fastPollMs;
+    for (const tracked of this._tracked.values()) {
+      if (now - tracked.lastEventTime <= ACTIVE_POLL_WINDOW_MS) return fastPollMs;
+    }
+    if (this._tracked.size > 0 || now - this._lastObservedActivityAt <= WARM_POLL_WINDOW_MS) {
+      return Math.max(fastPollMs, warmPollMs);
+    }
+    return Math.max(fastPollMs, coldPollMs);
+  }
+
+  _scheduleNextPoll(delayMs) {
+    if (!this._running) return;
+    this._timer = setTimeout(() => {
+      this._timer = null;
+      if (!this._running) return;
+      this._poll();
+      this._scheduleNextPoll(this._getPollIntervalMs());
+    }, delayMs);
+  }
+
   _pollFile(filePath, projectDir) {
     let stat;
     try {
@@ -140,6 +188,7 @@ class GeminiLogMonitor {
     } catch {
       return;
     }
+    this._lastObservedActivityAt = Date.now();
 
     this._processSession(filePath, data, projectDir, stat.mtimeMs);
   }
@@ -188,6 +237,7 @@ class GeminiLogMonitor {
         && tracked.msgCount === msgCount && tracked.hasTools === hasTools) {
       tracked.mtime = mtime;
       tracked.lastEventTime = Date.now();
+      this._lastObservedActivityAt = tracked.lastEventTime;
       return;
     }
 
@@ -199,6 +249,7 @@ class GeminiLogMonitor {
       mtime, sessionId, lastState: state, lastEventTime: Date.now(),
       msgCount, hasTools, cwd, turnHasTools: (prev && prev.turnHasTools) || false,
     });
+    this._lastObservedActivityAt = Date.now();
 
     this._onStateChange(sessionId, state, event, {
       cwd, sourcePid: null, agentPid: null,
@@ -216,17 +267,20 @@ class GeminiLogMonitor {
         && existing.msgCount === msgCount && !existing.hasTools) {
       existing.mtime = mtime;
       existing.lastEventTime = Date.now();
+      this._lastObservedActivityAt = existing.lastEventTime;
       return;
     }
 
     if (existing) {
       existing.mtime = mtime;
       existing.lastEventTime = Date.now();
+      this._lastObservedActivityAt = existing.lastEventTime;
     } else {
       this._tracked.set(filePath, {
         mtime, sessionId, lastState: null, lastEventTime: Date.now(),
         msgCount, hasTools: false, cwd, turnHasTools: false,
       });
+      this._lastObservedActivityAt = Date.now();
     }
 
     const timer = setTimeout(() => {
@@ -235,6 +289,7 @@ class GeminiLogMonitor {
         mtime, sessionId, lastState: "attention", lastEventTime: Date.now(),
         msgCount, hasTools: false, cwd, turnHasTools: false,
       });
+      this._lastObservedActivityAt = Date.now();
       this._onStateChange(sessionId, "attention", "Stop", {
         cwd, sourcePid: null, agentPid: null,
       });

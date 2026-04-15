@@ -116,6 +116,12 @@ module.exports = function initMenu(ctx) {
         click: (menuItem) => { ctx.bubbleFollowPet = menuItem.checked; },
       },
       {
+        label: t("lowPowerMode"),
+        type: "checkbox",
+        checked: ctx.lowPowerMode,
+        click: (menuItem) => { ctx.lowPowerMode = menuItem.checked; },
+      },
+      {
         label: t("hideBubbles"),
         type: "checkbox",
         checked: ctx.hideBubbles,
@@ -427,6 +433,12 @@ module.exports = function initMenu(ctx) {
         label: ctx.doNotDisturb ? t("wake") : t("sleep"),
         click: () => ctx.doNotDisturb ? ctx.disableDoNotDisturb() : ctx.enableDoNotDisturb(),
       },
+      {
+        label: t("lowPowerMode"),
+        type: "checkbox",
+        checked: ctx.lowPowerMode,
+        click: (menuItem) => { ctx.lowPowerMode = menuItem.checked; },
+      },
       { type: "separator" },
       {
         label: `${t("sessions")} (${ctx.sessions.size})`,
@@ -514,4 +526,3 @@ module.exports = function initMenu(ctx) {
     requestAppQuit,
   };
 };
-

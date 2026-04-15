@@ -134,6 +134,8 @@ let _fileOffsets = {};
 let _transitions = {};  // per-file fade config: { "file.apng": { in: 400, out: 400 } }
 let _miniFlipAssets = false; // theme's mini assets drawn in reverse direction
 let _inMiniMode = false;
+let _lowPowerMode = false;
+let _lastLayerFrameAt = 0;
 
 function applyMiniFlip(el) {
   if (!el || el.tagName !== "IMG") return;
@@ -194,6 +196,9 @@ window.electronAPI.onMiniModeChange((enabled, edge) => {
   } else {
     removeGlyphFlipCompensation(clawdEl);
   }
+});
+window.electronAPI.onPowerModeChange((enabled) => {
+  _lowPowerMode = !!enabled;
 });
 
 // Counter-flip asymmetric pixel-art glyphs (Zzz) inside SVG defs so they
@@ -607,9 +612,16 @@ function _startLayerAnimLoop() {
 
   function tick() {
     if (!_trackingLayers) { _layerAnimFrame = null; return; }
+    const now = performance.now();
+    if (_lowPowerMode && now - _lastLayerFrameAt < 80) {
+      _layerAnimFrame = requestAnimationFrame(tick);
+      return;
+    }
+    _lastLayerFrameAt = now;
 
     const rawDx = _layerTargetDx;
     const rawDy = _layerTargetDy;
+    let allLayersRest = rawDx === 0 && rawDy === 0;
 
     for (const layer of Object.values(_trackingLayers)) {
       // Scale the pre-calculated offset (from tick.js, already in [-maxOffset, maxOffset])
@@ -636,8 +648,13 @@ function _startLayerAnimLoop() {
       for (const w of layer.wrappers) {
         w.setAttribute("transform", `translate(${qx},${qy})`);
       }
+      if (qx !== 0 || qy !== 0) allLayersRest = false;
     }
 
+    if (_lowPowerMode && allLayersRest) {
+      _layerAnimFrame = null;
+      return;
+    }
     _layerAnimFrame = requestAnimationFrame(tick);
   }
 
@@ -664,6 +681,7 @@ function _cleanupLayeredTracking() {
   _layerTargetDx = 0;
   _layerTargetDy = 0;
   _layeredTrackingObj = null;
+  _lastLayerFrameAt = 0;
 }
 
 // ── Attach / Detach (dispatches to correct system) ──
@@ -738,6 +756,7 @@ window.electronAPI.onEyeMove((dx, dy) => {
     // Layered tracking: store targets, RAF loop handles easing
     _layerTargetDx = effectiveDx;
     _layerTargetDy = dy;
+    if (!_layerAnimFrame) _startLayerAnimLoop();
     return;
   }
 

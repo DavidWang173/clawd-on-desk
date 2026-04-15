@@ -222,6 +222,7 @@ let win;
 let hitWin;  // input window — small opaque rect over hitbox, receives all pointer events
 let tray = null;
 let contextMenuOwner = null;
+let lowPowerMode = false;
 // Mirror of _settingsController.get("size") — initialized from disk, kept in
 // sync by the settings subscriber. The legacy S/M/L → P:N migration runs
 // inside createWindow() because it needs the screen API.
@@ -334,6 +335,7 @@ function syncHitStateAfterLoad() {
 }
 
 function syncRendererStateAfterLoad({ includeStartupRecovery = true } = {}) {
+  sendToRenderer("power-mode-change", lowPowerMode);
   if (_mini.getMiniMode()) {
     sendToRenderer("mini-mode-change", true, _mini.getMiniEdge());
   }
@@ -606,6 +608,7 @@ const _tickCtx = {
   get forceEyeResend() { return forceEyeResend; },
   set forceEyeResend(v) { forceEyeResend = v; },
   get startupRecoveryActive() { return _state.getStartupRecoveryActive(); },
+  get lowPowerMode() { return lowPowerMode; },
   sendToRenderer,
   sendToHitWin,
   setState,
@@ -745,6 +748,8 @@ const _menuCtx = {
   set openAtLogin(v) { _settingsController.applyUpdate("openAtLogin", v); },
   get bubbleFollowPet() { return bubbleFollowPet; },
   set bubbleFollowPet(v) { _settingsController.applyUpdate("bubbleFollowPet", v); },
+  get lowPowerMode() { return lowPowerMode; },
+  set lowPowerMode(v) { setLowPowerMode(v); },
   get hideBubbles() { return hideBubbles; },
   set hideBubbles(v) { _settingsController.applyUpdate("hideBubbles", v); },
   get showSessionId() { return showSessionId; },
@@ -880,6 +885,23 @@ function wireSettingsSubscribers() {
   });
 }
 wireSettingsSubscribers();
+
+function setLowPowerMode(enabled) {
+  const next = !!enabled;
+  if (lowPowerMode === next) return;
+  lowPowerMode = next;
+  if (_tick && typeof _tick.setLowPowerMode === "function") {
+    _tick.setLowPowerMode(lowPowerMode);
+  }
+  if (_codexMonitor && typeof _codexMonitor.setLowPowerMode === "function") {
+    _codexMonitor.setLowPowerMode(lowPowerMode);
+  }
+  if (_geminiMonitor && typeof _geminiMonitor.setLowPowerMode === "function") {
+    _geminiMonitor.setLowPowerMode(lowPowerMode);
+  }
+  sendToRenderer("power-mode-change", lowPowerMode);
+  try { rebuildAllMenus(); } catch {}
+}
 
 // ── IPC: settings panel write entry points ──
 // Renderer-side callers (the future settings panel) use these. Menu/main code
@@ -1662,6 +1684,9 @@ if (!gotTheLock) {
             extra && extra.displayHint
         );
       });
+      if (typeof _codexMonitor.setLowPowerMode === "function") {
+        _codexMonitor.setLowPowerMode(lowPowerMode);
+      }
       if (_isAgentEnabled(_settingsController.getSnapshot(), "codex")) {
         _codexMonitor.start();
       }
@@ -1675,6 +1700,9 @@ if (!gotTheLock) {
       _geminiMonitor = new GeminiLogMonitor(geminiAgent, (sid, state, event, extra) => {
         updateSession(sid, state, event, null, extra.cwd, null, null, null, "gemini-cli");
       });
+      if (typeof _geminiMonitor.setLowPowerMode === "function") {
+        _geminiMonitor.setLowPowerMode(lowPowerMode);
+      }
       if (_isAgentEnabled(_settingsController.getSnapshot(), "gemini-cli")) {
         _geminiMonitor.start();
       }
