@@ -16,6 +16,8 @@ let yawnDelayTimer = null;     // tracked setTimeout for yawn/idle-look transiti
 let idleWasActive = false;
 let lastEyeDx = 0, lastEyeDy = 0;
 let mainTickTimer = null;
+let ambientNextAt = 0;
+let ambientArmed = false;
 
 const NORMAL_TICK_MS = 50;
 const LOW_POWER_TICK_MS = 125;
@@ -36,6 +38,61 @@ function refreshTheme() {
 }
 
 refreshTheme();
+
+function randInt(min, max) {
+  const lo = Math.min(min, max);
+  const hi = Math.max(min, max);
+  return Math.floor(Math.random() * (hi - lo + 1)) + lo;
+}
+
+function scheduleAmbient(initial = false) {
+  ambientArmed = true;
+  ambientNextAt = Date.now() + randInt(initial ? 45000 : 60000, initial ? 75000 : 120000);
+}
+
+function scheduleAmbientRetry() {
+  ambientArmed = true;
+  ambientNextAt = Date.now() + randInt(15000, 30000);
+}
+
+function clearAmbientSchedule() {
+  ambientArmed = false;
+  ambientNextAt = 0;
+}
+
+function noteAmbientActivity() {
+  clearAmbientSchedule();
+  if (ctx.currentState === "idle" && !ctx.idlePaused && !ctx.miniMode && !ctx.miniTransitioning) {
+    scheduleAmbient(true);
+  }
+}
+
+function pickWeighted(items) {
+  const total = items.reduce((sum, item) => sum + item.weight, 0);
+  if (total <= 0) return null;
+  let roll = Math.random() * total;
+  for (const item of items) {
+    roll -= item.weight;
+    if (roll <= 0) return item.build();
+  }
+  return items[items.length - 1].build();
+}
+
+function pickAmbientAction() {
+  const buildSvg = theme.workingTiers && theme.workingTiers[0] ? theme.workingTiers[0].file : null;
+  const conductSvg = theme.jugglingTiers && theme.jugglingTiers[0] ? theme.jugglingTiers[0].file : null;
+  const items = [
+    { weight: 24, build: () => ({ state: "thinking", durationMs: randInt(2500, 4000), source: "ambient" }) },
+    { weight: 22, build: () => ({ state: "working", durationMs: randInt(2000, 3500), source: "ambient" }) },
+    { weight: 18, build: () => ({ state: "attention", durationMs: randInt(1500, 2500), source: "ambient" }) },
+    { weight: 12, build: () => ({ state: "sweeping", durationMs: randInt(3000, 4500), source: "ambient" }) },
+    { weight: 10, build: () => ({ state: "juggling", durationMs: randInt(3000, 5000), source: "ambient" }) },
+    { weight: buildSvg ? 6 : 0, build: () => ({ state: "working", svgOverride: buildSvg, durationMs: randInt(4000, 6000), source: "ambient" }) },
+    { weight: 5, build: () => ({ state: "carrying", durationMs: randInt(2000, 3000), source: "ambient" }) },
+    { weight: conductSvg ? 2 : 0, build: () => ({ state: "juggling", svgOverride: conductSvg, durationMs: randInt(4000, 6000), source: "ambient" }) },
+  ];
+  return pickWeighted(items);
+}
 
 function getTickIntervalMs() {
   return ctx.lowPowerMode ? LOW_POWER_TICK_MS : NORMAL_TICK_MS;
@@ -59,11 +116,13 @@ function tickOnce() {
     lastEyeDy = 0;
     if (idleLookReturnTimer) { clearTimeout(idleLookReturnTimer); idleLookReturnTimer = null; }
     if (yawnDelayTimer) { clearTimeout(yawnDelayTimer); yawnDelayTimer = null; }
+    scheduleAmbient(true);
   }
 
   if (!idleNow && idleWasActive) {
     if (idleLookReturnTimer) { clearTimeout(idleLookReturnTimer); idleLookReturnTimer = null; }
     if (yawnDelayTimer) { clearTimeout(yawnDelayTimer); yawnDelayTimer = null; }
+    clearAmbientSchedule();
   }
   idleWasActive = idleNow;
 
@@ -123,6 +182,7 @@ function tickOnce() {
         isMouseIdle = false;
         ctx.sendToRenderer("state-change", "idle", SVG_IDLE_FOLLOW);
       }
+      scheduleAmbient(true);
     }
 
     const elapsed = Date.now() - mouseStillSince;
@@ -166,6 +226,27 @@ function tickOnce() {
         }
       }, 250 + pick.duration);
       return;
+    }
+
+    const canAmbientTrigger = ambientArmed
+      && Date.now() >= ambientNextAt
+      && !isMouseIdle
+      && !ctx.doNotDisturb
+      && !ctx.miniMode
+      && !ctx.miniTransitioning
+      && !ctx.dragLocked
+      && !ctx.menuOpen
+      && !ctx.startupRecoveryActive
+      && ctx.resolveDisplayState() === "idle"
+      && typeof ctx.triggerTransientAction === "function";
+
+    if (canAmbientTrigger) {
+      const pick = pickAmbientAction();
+      if (pick && ctx.triggerTransientAction(pick)) {
+        scheduleAmbient(false);
+        return;
+      }
+      scheduleAmbientRetry();
     }
   }
 
@@ -240,6 +321,7 @@ function cleanup() {
   idleWasActive = false;
   lastEyeDx = 0;
   lastEyeDy = 0;
+  clearAmbientSchedule();
 }
 
 // Expose mouseStillSince for wake poll (state.js deep sleep timeout)
@@ -250,6 +332,7 @@ Object.defineProperty(startMainTick, "_mouseStillSince", {
 return {
   startMainTick,
   resetIdleTimer,
+  noteAmbientActivity,
   cleanup,
   refreshTheme,
   setLowPowerMode,

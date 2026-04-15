@@ -19,17 +19,24 @@ if (window.hitAPI && window.hitAPI.onThemeConfig) {
 // --- State synced from main ---
 let currentSvg = null;
 let currentState = null;
+let resolvedState = null;
 let miniMode = false;
 let dndEnabled = false;
+let transientSource = null;
 
 window.hitAPI.onStateSync((data) => {
   if (data.currentSvg !== undefined) currentSvg = data.currentSvg;
   if (data.currentState !== undefined) currentState = data.currentState;
+  if (data.resolvedState !== undefined) resolvedState = data.resolvedState;
+  if (data.transientSource !== undefined) transientSource = data.transientSource;
   if (data.miniMode !== undefined) {
     miniMode = data.miniMode;
     area.style.cursor = miniMode ? "default" : "";
   }
   if (data.dndEnabled !== undefined) dndEnabled = data.dndEnabled;
+  if (currentState !== "idle" || miniMode || dndEnabled) {
+    cancelHoverTracking();
+  }
 });
 
 // --- Drag state ---
@@ -40,6 +47,19 @@ let mouseDownX, mouseDownY;
 let pendingDx = 0, pendingDy = 0;
 let dragRAF = null;
 const DRAG_THRESHOLD = 3;
+const LONG_PRESS_MIN_MS = 500;
+const LONG_PRESS_MOVE_THRESHOLD = 6;
+const DRAG_RELEASE_MIN_DISTANCE = 12;
+const DRAG_RELEASE_MAX_DISTANCE = 84;
+const HOVER_MIN_MS = 1200;
+const HOVER_MAX_MS = 1800;
+
+let pointerDownAt = 0;
+let maxPressTravel = 0;
+let dragReleaseDistance = 0;
+let hoverTimer = null;
+let hoverInside = false;
+let hoverTriggeredForEntry = false;
 
 // --- Reaction state (tracked here to gate input) ---
 let isReacting = false;
@@ -47,15 +67,77 @@ let isDragReacting = false;
 
 // Cancel signal from main (e.g. state change)
 window.hitAPI.onCancelReaction(() => {
-  if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; clickCount = 0; firstClickDir = null; }
+  resetClickSequence();
   isReacting = false;
   isDragReacting = false;
 });
 
+function randomInRange(min, max) {
+  const lo = Math.min(min, max);
+  const hi = Math.max(min, max);
+  return Math.floor(Math.random() * (hi - lo + 1)) + lo;
+}
+
+function resetPointerTracking() {
+  pointerDownAt = 0;
+  maxPressTravel = 0;
+  dragReleaseDistance = 0;
+}
+
+function cancelHoverTracking(resetEntry = false) {
+  if (hoverTimer) {
+    clearTimeout(hoverTimer);
+    hoverTimer = null;
+  }
+  if (resetEntry) hoverTriggeredForEntry = false;
+}
+
+function canTriggerGestureLocally() {
+  return !miniMode
+    && !dndEnabled
+    && resolvedState === "idle"
+    && (currentState === "idle" || transientSource === "ambient")
+    && !isReacting
+    && !isDragReacting;
+}
+
+function triggerGesture(type) {
+  if (!type || !canTriggerGestureLocally()) return;
+  window.hitAPI.triggerGesture(type);
+}
+
+function scheduleHoverTracking() {
+  cancelHoverTracking();
+  if (!hoverInside || hoverTriggeredForEntry || isDragging || !canTriggerGestureLocally()) return;
+  hoverTimer = setTimeout(() => {
+    hoverTimer = null;
+    if (!hoverInside || hoverTriggeredForEntry || isDragging || !canTriggerGestureLocally()) return;
+    hoverTriggeredForEntry = true;
+    triggerGesture("hover");
+  }, randomInRange(HOVER_MIN_MS, HOVER_MAX_MS));
+}
+
+function shouldTriggerLongPress() {
+  if (!canTriggerGestureLocally()) return false;
+  if (didDrag || pointerDownAt === 0) return false;
+  if (maxPressTravel > LONG_PRESS_MOVE_THRESHOLD) return false;
+  return (Date.now() - pointerDownAt) >= LONG_PRESS_MIN_MS;
+}
+
+function shouldTriggerDragRelease() {
+  if (miniMode || dndEnabled) return false;
+  if (resolvedState !== "idle") return false;
+  if (currentState !== "idle" && transientSource !== "ambient") return false;
+  if (isReacting) return false;
+  return dragReleaseDistance >= DRAG_RELEASE_MIN_DISTANCE
+    && dragReleaseDistance <= DRAG_RELEASE_MAX_DISTANCE;
+}
+
 // --- Pointer handlers ---
 area.addEventListener("pointerdown", (e) => {
   if (e.button === 0) {
-    if (miniMode) { didDrag = false; return; }
+    if (miniMode) { didDrag = false; resetPointerTracking(); return; }
+    cancelHoverTracking();
     area.setPointerCapture(e.pointerId);
     isDragging = true;
     didDrag = false;
@@ -65,6 +147,9 @@ area.addEventListener("pointerdown", (e) => {
     mouseDownY = e.clientY;
     pendingDx = 0;
     pendingDy = 0;
+    pointerDownAt = Date.now();
+    maxPressTravel = 0;
+    dragReleaseDistance = 0;
     window.hitAPI.dragLock(true);
     area.classList.add("dragging");
   }
@@ -77,9 +162,13 @@ document.addEventListener("pointermove", (e) => {
     lastScreenX = e.screenX;
     lastScreenY = e.screenY;
 
+    const totalDx = e.clientX - mouseDownX;
+    const totalDy = e.clientY - mouseDownY;
+    const totalDistance = Math.hypot(totalDx, totalDy);
+    maxPressTravel = Math.max(maxPressTravel, totalDistance);
+    dragReleaseDistance = Math.max(dragReleaseDistance, totalDistance);
+
     if (!didDrag) {
-      const totalDx = e.clientX - mouseDownX;
-      const totalDy = e.clientY - mouseDownY;
       if (Math.abs(totalDx) > DRAG_THRESHOLD || Math.abs(totalDy) > DRAG_THRESHOLD) {
         didDrag = true;
         startDragReaction();
@@ -115,8 +204,21 @@ function stopDrag() {
 
 document.addEventListener("pointerup", (e) => {
   if (e.button === 0) {
+    const longPress = shouldTriggerLongPress();
+    const dragRelease = didDrag && shouldTriggerDragRelease();
     const wasDrag = didDrag;
     stopDrag();
+    if (longPress) {
+      resetClickSequence();
+      triggerGesture("longpress");
+      resetPointerTracking();
+      return;
+    }
+    if (dragRelease) {
+      triggerGesture("drag-release");
+      resetPointerTracking();
+      return;
+    }
     if (!wasDrag) {
       if (e.ctrlKey || e.metaKey) {
         window.hitAPI.showSessionMenu();
@@ -124,12 +226,35 @@ document.addEventListener("pointerup", (e) => {
         handleClick(e.clientX);
       }
     }
+    resetPointerTracking();
   }
 });
 
-area.addEventListener("pointercancel", () => stopDrag());
-area.addEventListener("lostpointercapture", () => { if (isDragging) stopDrag(); });
-window.addEventListener("blur", stopDrag);
+area.addEventListener("pointerenter", () => {
+  hoverInside = true;
+  hoverTriggeredForEntry = false;
+  scheduleHoverTracking();
+});
+
+area.addEventListener("pointerleave", () => {
+  hoverInside = false;
+  cancelHoverTracking(true);
+});
+
+area.addEventListener("pointercancel", () => {
+  stopDrag();
+  resetPointerTracking();
+  cancelHoverTracking();
+});
+area.addEventListener("lostpointercapture", () => {
+  if (isDragging) stopDrag();
+  resetPointerTracking();
+});
+window.addEventListener("blur", () => {
+  stopDrag();
+  resetPointerTracking();
+  cancelHoverTracking();
+});
 
 // --- Click reaction logic (2-click = poke, 4-click = flail) ---
 const CLICK_WINDOW_MS = 400;
@@ -140,6 +265,12 @@ let firstClickDir = null;
 
 function _getReaction(name) {
   return _reactions[name] || null;
+}
+
+function resetClickSequence() {
+  if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+  clickCount = 0;
+  firstClickDir = null;
 }
 
 function handleClick(clientX) {
@@ -169,8 +300,7 @@ function handleClick(clientX) {
   const rightReact = _getReaction("clickRight");
 
   if (clickCount >= 4 && doubleReact) {
-    clickCount = 0;
-    firstClickDir = null;
+    resetClickSequence();
     const files = doubleReact.files || [doubleReact.file];
     const file = files[Math.floor(Math.random() * files.length)];
     playReaction(file, doubleReact.duration || 3500);
@@ -191,9 +321,7 @@ function handleClick(clientX) {
     }, CLICK_WINDOW_MS);
   } else {
     clickTimer = setTimeout(() => {
-      clickTimer = null;
-      clickCount = 0;
-      firstClickDir = null;
+      resetClickSequence();
     }, CLICK_WINDOW_MS);
   }
 }

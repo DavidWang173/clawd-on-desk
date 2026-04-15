@@ -329,6 +329,8 @@ function syncHitStateAfterLoad() {
   sendToHitWin("hit-state-sync", {
     currentSvg: _state.getCurrentSvg(),
     currentState: _state.getCurrentState(),
+    resolvedState: resolveDisplayState(),
+    transientSource: _state.getTransientSource(),
     miniMode: _mini.getMiniMode(),
     dndEnabled: doNotDisturb,
   });
@@ -503,6 +505,7 @@ function reapplyMacVisibility() {
 }
 
 // ── State machine — delegated to src/state.js ──
+let _tick = null;
 const _stateCtx = {
   get theme() { return activeTheme; },
   get win() { return win; },
@@ -534,6 +537,11 @@ const _stateCtx = {
   miniPeekOut: () => miniPeekOut(),
   buildContextMenu: () => buildContextMenu(),
   buildTrayMenu: () => buildTrayMenu(),
+  noteAmbientActivity: (source) => {
+    if (_tick && typeof _tick.noteAmbientActivity === "function") {
+      _tick.noteAmbientActivity(source);
+    }
+  },
   // Phase 3b: 读 prefs.themeOverrides 判断某个 oneshot state 是否被用户禁用。
   // state.js gate 调这个做 early-return。不做白名单校验——settings-actions
   // 负责写入合法性，这里只读。
@@ -563,6 +571,7 @@ const _stateCtx = {
 };
 const _state = require("./state")(_stateCtx);
 const { setState, applyState, updateSession, resolveDisplayState, getSvgOverride,
+        triggerTransientAction,
         enableDoNotDisturb, disableDoNotDisturb, startStaleCleanup, stopStaleCleanup,
         startWakePoll, stopWakePoll, detectRunningAgentProcesses, buildSessionSubmenu,
         startStartupRecovery: _startStartupRecovery } = _state;
@@ -609,17 +618,95 @@ const _tickCtx = {
   set forceEyeResend(v) { forceEyeResend = v; },
   get startupRecoveryActive() { return _state.getStartupRecoveryActive(); },
   get lowPowerMode() { return lowPowerMode; },
+  get doNotDisturb() { return doNotDisturb; },
   sendToRenderer,
   sendToHitWin,
   setState,
   applyState,
+  resolveDisplayState,
+  triggerTransientAction,
   miniPeekIn: () => miniPeekIn(),
   miniPeekOut: () => miniPeekOut(),
   getObjRect,
   getHitRectScreen,
 };
-const _tick = require("./tick")(_tickCtx);
+_tick = require("./tick")(_tickCtx);
 const { startMainTick, resetIdleTimer } = _tick;
+
+function randInt(min, max) {
+  const lo = Math.min(min, max);
+  const hi = Math.max(min, max);
+  return Math.floor(Math.random() * (hi - lo + 1)) + lo;
+}
+
+function pickWeightedOption(items) {
+  const total = items.reduce((sum, item) => sum + item.weight, 0);
+  if (total <= 0) return null;
+  let roll = Math.random() * total;
+  for (const item of items) {
+    roll -= item.weight;
+    if (roll <= 0) return item.build();
+  }
+  return items[items.length - 1].build();
+}
+
+function canTriggerInteractionTransient() {
+  if (doNotDisturb || _mini.getMiniMode() || _mini.getMiniTransitioning()) return false;
+  if (menuOpen || dragLocked) return false;
+  if (resolveDisplayState() !== "idle") return false;
+  if (_state.getCurrentState() !== "idle" && _state.getTransientSource() !== "ambient") return false;
+  return true;
+}
+
+function buildInteractionTransient(type) {
+  const buildSvg = activeTheme && activeTheme.workingTiers && activeTheme.workingTiers[0]
+    ? activeTheme.workingTiers[0].file
+    : null;
+  const conductSvg = activeTheme && activeTheme.jugglingTiers && activeTheme.jugglingTiers[0]
+    ? activeTheme.jugglingTiers[0].file
+    : null;
+
+  if (type === "hover") {
+    return pickWeightedOption([
+      { weight: 4, build: () => ({ state: "thinking", durationMs: randInt(2200, 3600), source: "interaction" }) },
+      { weight: 3, build: () => ({ state: "attention", durationMs: randInt(1500, 2300), source: "interaction" }) },
+      { weight: 3, build: () => ({ state: "working", durationMs: randInt(2000, 3200), source: "interaction" }) },
+    ]);
+  }
+
+  if (type === "drag-release") {
+    return pickWeightedOption([
+      { weight: 8, build: () => ({ state: "sweeping", durationMs: randInt(3000, 4500), source: "interaction" }) },
+      { weight: 2, build: () => ({ state: "juggling", durationMs: randInt(3000, 4800), source: "interaction" }) },
+      { weight: buildSvg ? 1 : 0, build: () => ({ state: "working", svgOverride: buildSvg, durationMs: randInt(4000, 5500), source: "interaction" }) },
+    ]);
+  }
+
+  if (type === "longpress") {
+    return pickWeightedOption([
+      { weight: 4, build: () => ({ state: "thinking", durationMs: randInt(2400, 3800), source: "interaction" }) },
+      { weight: 4, build: () => ({ state: "working", durationMs: randInt(2200, 3400), source: "interaction" }) },
+      { weight: 3, build: () => ({ state: "attention", durationMs: randInt(1600, 2400), source: "interaction" }) },
+      { weight: 3, build: () => ({ state: "sweeping", durationMs: randInt(3000, 4500), source: "interaction" }) },
+      { weight: 1, build: () => ({ state: "juggling", durationMs: randInt(3200, 5000), source: "interaction" }) },
+      { weight: buildSvg ? 1 : 0, build: () => ({ state: "working", svgOverride: buildSvg, durationMs: randInt(4000, 5500), source: "interaction" }) },
+      { weight: conductSvg ? 1 : 0, build: () => ({ state: "juggling", svgOverride: conductSvg, durationMs: randInt(4200, 5800), source: "interaction" }) },
+      { weight: 1, build: () => ({ state: "carrying", durationMs: randInt(2200, 3200), source: "interaction" }) },
+    ]);
+  }
+
+  return null;
+}
+
+function handleHitGesture(type) {
+  if (_tick && typeof _tick.noteAmbientActivity === "function") {
+    _tick.noteAmbientActivity("interaction");
+  }
+  if (!canTriggerInteractionTransient()) return false;
+  const action = buildInteractionTransient(type);
+  if (!action) return false;
+  return triggerTransientAction(action);
+}
 
 // ── Terminal focus — delegated to src/focus.js ──
 const _focus = require("./focus")({ _allowSetForeground });
@@ -1260,7 +1347,12 @@ function createWindow() {
     });
   }
 
-  ipcMain.on("show-context-menu", showPetContextMenu);
+  ipcMain.on("show-context-menu", () => {
+    if (_tick && typeof _tick.noteAmbientActivity === "function") {
+      _tick.noteAmbientActivity("interaction");
+    }
+    showPetContextMenu();
+  });
 
   ipcMain.on("move-window-by", (event, dx, dy) => {
     if (_mini.getMiniMode() || _mini.getMiniTransitioning()) return;
@@ -1288,13 +1380,28 @@ function createWindow() {
   });
 
   // Reaction relay: hitWin → main → renderWin
-  ipcMain.on("start-drag-reaction", () => sendToRenderer("start-drag-reaction"));
+  ipcMain.on("start-drag-reaction", () => {
+    if (_tick && typeof _tick.noteAmbientActivity === "function") {
+      _tick.noteAmbientActivity("interaction");
+    }
+    sendToRenderer("start-drag-reaction");
+  });
   ipcMain.on("end-drag-reaction", () => sendToRenderer("end-drag-reaction"));
   ipcMain.on("play-click-reaction", (_, svg, duration) => {
+    if (_tick && typeof _tick.noteAmbientActivity === "function") {
+      _tick.noteAmbientActivity("interaction");
+    }
     sendToRenderer("play-click-reaction", svg, duration);
+  });
+  ipcMain.on("hit-gesture", (_, payload) => {
+    const type = payload && typeof payload.type === "string" ? payload.type : "";
+    handleHitGesture(type);
   });
 
   ipcMain.on("drag-end", () => {
+    if (_tick && typeof _tick.noteAmbientActivity === "function") {
+      _tick.noteAmbientActivity("interaction");
+    }
     if (!_mini.getMiniMode() && !_mini.getMiniTransitioning()) {
       checkMiniModeSnap();
       // After drag, clamp to the nearest screen (loose clamp during drag allows cross-screen).

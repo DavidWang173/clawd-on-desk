@@ -74,6 +74,14 @@ let pendingState = null;
 let eyeResendTimer = null;
 let updateVisualState = null;
 let updateVisualSvgOverride = null;
+let transientAction = null;
+let transientTimer = null;
+let transientGuardDepth = 0;
+
+const TRANSIENT_SOURCE_PRIORITY = {
+  ambient: 1,
+  interaction: 2,
+};
 
 const UPDATE_VISUAL_STATE_MAP = {
   checking: "sweeping",
@@ -127,8 +135,71 @@ function refreshTheme() {
 
 refreshTheme();
 
+function withTransientGuard(fn) {
+  transientGuardDepth++;
+  try { return fn(); }
+  finally { transientGuardDepth = Math.max(0, transientGuardDepth - 1); }
+}
+
+function clearTransientAction() {
+  if (transientTimer) { clearTimeout(transientTimer); transientTimer = null; }
+  transientAction = null;
+}
+
+function maybeInterruptTransientAction(incomingState) {
+  if (!transientAction || transientGuardDepth > 0) return false;
+  if (!incomingState || incomingState === "idle" || incomingState === "mini-idle") return false;
+  clearTransientAction();
+  return true;
+}
+
+function getTransientPriority(source, explicitPriority) {
+  if (typeof explicitPriority === "number") return explicitPriority;
+  return TRANSIENT_SOURCE_PRIORITY[source] || 0;
+}
+
+function triggerTransientAction(options = {}) {
+  const state = options.state;
+  const svgOverride = options.svgOverride || null;
+  const durationMs = Math.max(0, Number(options.durationMs) || 0);
+  const source = options.source || "ambient";
+  const priority = getTransientPriority(source, options.priority);
+
+  if (!state || durationMs <= 0) return false;
+  if (ctx.doNotDisturb || ctx.miniMode || ctx.miniTransitioning) return false;
+  if (resolveDisplayState() !== "idle") return false;
+  if (SLEEP_SEQUENCE.has(currentState) || currentState === "waking") return false;
+  if (currentState !== "idle" && !transientAction) return false;
+  if (transientAction && priority < transientAction.priority) return false;
+
+  clearTransientAction();
+
+  const token = Date.now() + Math.random();
+  transientAction = { state, svgOverride, durationMs, source, priority, token, startedAt: Date.now() };
+
+  transientTimer = setTimeout(() => {
+    if (!transientAction || transientAction.token !== token) return;
+    clearTransientAction();
+    withTransientGuard(() => {
+      const resolved = resolveDisplayState();
+      applyState(resolved, getSvgOverride(resolved));
+    });
+  }, durationMs);
+
+  withTransientGuard(() => applyState(state, svgOverride || undefined));
+  return true;
+}
+
 function setState(newState, svgOverride) {
   if (ctx.doNotDisturb) return;
+
+  if (maybeInterruptTransientAction(newState)) {
+    applyState(newState, svgOverride);
+    return;
+  }
+  if (transientAction && (newState === "idle" || newState === "mini-idle")) {
+    return;
+  }
 
   if (newState === "yawning" && SLEEP_SEQUENCE.has(currentState)) return;
 
@@ -180,6 +251,11 @@ function isOneshotDisabled(logicalState) {
 }
 
 function applyState(state, svgOverride) {
+  maybeInterruptTransientAction(state);
+  if (transientAction && transientGuardDepth === 0 && (state === "idle" || state === "mini-idle")) {
+    return;
+  }
+
   // Phase 3b: user-disabled oneshot state — skip visual + sound, fall back to
   // whatever resolveDisplayState picks (usually working/idle). Gate lives at
   // applyState() top so it catches all three paths that reach here:
@@ -246,7 +322,12 @@ function applyState(state, svgOverride) {
 
   ctx.sendToRenderer("state-change", state, svg);
   ctx.syncHitWin();
-  ctx.sendToHitWin("hit-state-sync", { currentSvg: svg, currentState: state });
+  ctx.sendToHitWin("hit-state-sync", {
+    currentSvg: svg,
+    currentState: state,
+    resolvedState: resolveDisplayState(),
+    transientSource: transientAction ? transientAction.source : null,
+  });
   ctx.sendToHitWin("hit-cancel-reaction");
 
   if (state !== "idle" && state !== "mini-idle") {
@@ -360,6 +441,10 @@ function updateSession(sessionId, state, event, sourcePid, cwd, editor, pidChain
   if (startupRecoveryActive) {
     startupRecoveryActive = false;
     if (startupRecoveryTimer) { clearTimeout(startupRecoveryTimer); startupRecoveryTimer = null; }
+  }
+
+  if (typeof ctx.noteAmbientActivity === "function" && event !== "stale-cleanup") {
+    ctx.noteAmbientActivity("agent");
   }
 
   if (event === "PermissionRequest") {
@@ -783,6 +868,7 @@ function getCurrentState() { return currentState; }
 function getCurrentSvg() { return currentSvg; }
 function getCurrentHitBox() { return currentHitBox; }
 function getStartupRecoveryActive() { return startupRecoveryActive; }
+function getTransientSource() { return transientAction ? transientAction.source : null; }
 
 function cleanup() {
   if (pendingTimer) clearTimeout(pendingTimer);
@@ -790,17 +876,19 @@ function cleanup() {
   if (eyeResendTimer) clearTimeout(eyeResendTimer);
   if (startupRecoveryTimer) clearTimeout(startupRecoveryTimer);
   if (wakePollTimer) clearInterval(wakePollTimer);
+  if (transientTimer) clearTimeout(transientTimer);
   stopStaleCleanup();
 }
 
 return {
   setState, applyState, updateSession, resolveDisplayState, setUpdateVisualState,
+  triggerTransientAction,
   enableDoNotDisturb, disableDoNotDisturb,
   startStaleCleanup, stopStaleCleanup, startWakePoll, stopWakePoll,
   getSvgOverride, cleanStaleSessions, startStartupRecovery, refreshTheme,
   detectRunningAgentProcesses, buildSessionSubmenu,
   clearSessionsByAgent,
-  getCurrentState, getCurrentSvg, getCurrentHitBox, getStartupRecoveryActive,
+  getCurrentState, getCurrentSvg, getCurrentHitBox, getStartupRecoveryActive, getTransientSource,
   sessions, STATE_PRIORITY, ONESHOT_STATES, SLEEP_SEQUENCE,
   get STATE_SVGS() { return STATE_SVGS; },
   get HIT_BOXES() { return HIT_BOXES; },
