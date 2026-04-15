@@ -334,6 +334,10 @@ class CodexLogMonitor {
       }
     }
 
+    const displayHint = state === "working"
+      ? this._inferDisplayHint(key, payload)
+      : null;
+
     // Avoid spamming same state
     if (state === tracked.lastState && state === "working") return;
     tracked.lastState = state;
@@ -344,7 +348,51 @@ class CodexLogMonitor {
       cwd: tracked.cwd,
       sourcePid: agentPid,
       agentPid,
+      displayHint,
     });
+  }
+
+  _parsePayloadArguments(payload) {
+    if (!payload || typeof payload !== "object") return null;
+    const args = payload.arguments;
+    if (!args) return null;
+    if (typeof args === "object") return args;
+    if (typeof args !== "string") return null;
+    try {
+      const parsed = JSON.parse(args);
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  _inferDisplayHint(key, payload) {
+    if (!payload || typeof payload !== "object") return null;
+
+    if (key === "event_msg:patch_apply_end") return "codex-working-patching";
+
+    const name = typeof payload.name === "string" ? payload.name : "";
+    const args = this._parsePayloadArguments(payload);
+    const rawCmd = (args && (args.command || args.cmd))
+      || payload.command
+      || "";
+    const cmd = String(rawCmd).toLowerCase();
+
+    if (name === "shell_command" || name === "exec_command") {
+      if (/(^|[\s/])(npm|pnpm|yarn|bun|cargo|go|pytest|make|cmake|gradle|mvn|xcodebuild)([\s:]|$)|swift build/.test(cmd)) {
+        return "codex-working-shell-heavy";
+      }
+      if (/(^|[\s/])(cat|sed|rg|grep|ls|find|head|tail|wc)([\s:]|$)/.test(cmd)) {
+        return "codex-working-reading";
+      }
+      return null;
+    }
+
+    if (name === "apply_patch") {
+      return "codex-working-patching";
+    }
+
+    return null;
   }
 
   // Extract shell command from function_call payload
